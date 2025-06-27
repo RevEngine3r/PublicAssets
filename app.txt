@@ -1,0 +1,1557 @@
+// build.gradle.kts (Module: app)
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("kotlin-kapt")
+    id("dagger.hilt.android.plugin")
+    id("kotlin-parcelize")
+}
+
+android {
+    namespace = "com.irrexpensetracker"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.irrexpensetracker"
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables {
+            useSupportLibrary = true
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+    buildFeatures {
+        compose = true
+    }
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.4"
+    }
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    
+    // Navigation
+    implementation("androidx.navigation:navigation-compose:2.7.5")
+    
+    // ViewModel
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    
+    // Room
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
+    
+    // DataStore
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
+    
+    // Google Sign-In
+    implementation("com.google.android.gms:play-services-auth:20.7.0")
+    implementation("com.google.api-client:google-api-client-android:1.32.1")
+    implementation("com.google.apis:google-api-services-drive:v3-rev20220815-2.0.0")
+    
+    // Hilt
+    implementation("com.google.dagger:hilt-android:2.48")
+    implementation("androidx.hilt:hilt-navigation-compose:1.1.0")
+    kapt("com.google.dagger:hilt-compiler:2.48")
+    
+    // Gson for JSON serialization
+    implementation("com.google.code.gson:gson:2.10.1")
+    
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// =============================================================================
+// MainActivity.kt
+// =============================================================================
+
+package com.irrexpensetracker
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.navigation.compose.rememberNavController
+import com.irrexpensetracker.ui.navigation.ExpenseTrackerNavigation
+import com.irrexpensetracker.ui.theme.IRRExpenseTrackerTheme
+import dagger.hilt.android.AndroidEntryPoint
+
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            IRRExpenseTrackerTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    val navController = rememberNavController()
+                    ExpenseTrackerNavigation(navController = navController)
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Database Entities
+// =============================================================================
+
+package com.irrexpensetracker.data.entity
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+import androidx.room.ForeignKey
+import androidx.room.Index
+
+@Entity(
+    tableName = "expense_lists",
+    indices = [Index(value = ["id"], unique = true)]
+)
+data class ExpenseList(
+    @PrimaryKey
+    val id: String,
+    val title: String,
+    val color: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val isDeleted: Boolean = false
+)
+
+@Entity(
+    tableName = "expenses",
+    foreignKeys = [
+        ForeignKey(
+            entity = ExpenseList::class,
+            parentColumns = ["id"],
+            childColumns = ["listId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index(value = ["listId"])]
+)
+data class Expense(
+    @PrimaryKey
+    val id: String,
+    val listId: String,
+    val title: String,
+    val amount: Double,
+    val color: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val isDeleted: Boolean = false
+)
+
+// =============================================================================
+// Database DAOs
+// =============================================================================
+
+package com.irrexpensetracker.data.dao
+
+import androidx.room.*
+import com.irrexpensetracker.data.entity.ExpenseList
+import com.irrexpensetracker.data.entity.Expense
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface ExpenseListDao {
+    @Query("SELECT * FROM expense_lists WHERE isDeleted = 0 ORDER BY updatedAt DESC")
+    fun getAllExpenseLists(): Flow<List<ExpenseList>>
+    
+    @Query("SELECT * FROM expense_lists WHERE id = :id AND isDeleted = 0")
+    suspend fun getExpenseListById(id: String): ExpenseList?
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertExpenseList(expenseList: ExpenseList)
+    
+    @Update
+    suspend fun updateExpenseList(expenseList: ExpenseList)
+    
+    @Query("UPDATE expense_lists SET isDeleted = 1, updatedAt = :timestamp WHERE id = :id")
+    suspend fun markExpenseListAsDeleted(id: String, timestamp: Long)
+    
+    @Query("DELETE FROM expense_lists WHERE id = :id")
+    suspend fun deleteExpenseListPermanently(id: String)
+}
+
+@Dao
+interface ExpenseDao {
+    @Query("SELECT * FROM expenses WHERE listId = :listId AND isDeleted = 0 ORDER BY createdAt DESC")
+    fun getExpensesByListId(listId: String): Flow<List<Expense>>
+    
+    @Query("SELECT * FROM expenses WHERE id = :id AND isDeleted = 0")
+    suspend fun getExpenseById(id: String): Expense?
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertExpense(expense: Expense)
+    
+    @Update
+    suspend fun updateExpense(expense: Expense)
+    
+    @Query("UPDATE expenses SET isDeleted = 1, updatedAt = :timestamp WHERE id = :id")
+    suspend fun markExpenseAsDeleted(id: String, timestamp: Long)
+    
+    @Query("DELETE FROM expenses WHERE id = :id")
+    suspend fun deleteExpensePermanently(id: String)
+    
+    @Query("SELECT SUM(amount) FROM expenses WHERE listId = :listId AND isDeleted = 0")
+    suspend fun getTotalAmountForList(listId: String): Double?
+}
+
+// =============================================================================
+// Database
+// =============================================================================
+
+package com.irrexpensetracker.data.database
+
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import android.content.Context
+import com.irrexpensetracker.data.dao.ExpenseDao
+import com.irrexpensetracker.data.dao.ExpenseListDao
+import com.irrexpensetracker.data.entity.Expense
+import com.irrexpensetracker.data.entity.ExpenseList
+
+@Database(
+    entities = [ExpenseList::class, Expense::class],
+    version = 1,
+    exportSchema = false
+)
+abstract class ExpenseDatabase : RoomDatabase() {
+    abstract fun expenseListDao(): ExpenseListDao
+    abstract fun expenseDao(): ExpenseDao
+    
+    companion object {
+        @Volatile
+        private var INSTANCE: ExpenseDatabase? = null
+        
+        fun getDatabase(context: Context): ExpenseDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    ExpenseDatabase::class.java,
+                    "expense_database"
+                ).build()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Repository
+// =============================================================================
+
+package com.irrexpensetracker.data.repository
+
+import com.irrexpensetracker.data.dao.ExpenseDao
+import com.irrexpensetracker.data.dao.ExpenseListDao
+import com.irrexpensetracker.data.entity.Expense
+import com.irrexpensetracker.data.entity.ExpenseList
+import kotlinx.coroutines.flow.Flow
+import java.util.*
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class ExpenseRepository @Inject constructor(
+    private val expenseListDao: ExpenseListDao,
+    private val expenseDao: ExpenseDao
+) {
+    fun getAllExpenseLists(): Flow<List<ExpenseList>> = expenseListDao.getAllExpenseLists()
+    
+    fun getExpensesByListId(listId: String): Flow<List<Expense>> = expenseDao.getExpensesByListId(listId)
+    
+    suspend fun getExpenseListById(id: String): ExpenseList? = expenseListDao.getExpenseListById(id)
+    
+    suspend fun getTotalAmountForList(listId: String): Double = expenseDao.getTotalAmountForList(listId) ?: 0.0
+    
+    suspend fun createExpenseList(title: String, color: String): ExpenseList {
+        val expenseList = ExpenseList(
+            id = UUID.randomUUID().toString(),
+            title = title,
+            color = color,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        expenseListDao.insertExpenseList(expenseList)
+        return expenseList
+    }
+    
+    suspend fun updateExpenseList(expenseList: ExpenseList) {
+        expenseListDao.updateExpenseList(expenseList.copy(updatedAt = System.currentTimeMillis()))
+    }
+    
+    suspend fun deleteExpenseList(id: String) {
+        expenseListDao.markExpenseListAsDeleted(id, System.currentTimeMillis())
+    }
+    
+    suspend fun createExpense(listId: String, title: String, amount: Double, color: String): Expense {
+        val expense = Expense(
+            id = UUID.randomUUID().toString(),
+            listId = listId,
+            title = title,
+            amount = amount,
+            color = color,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        expenseDao.insertExpense(expense)
+        return expense
+    }
+    
+    suspend fun updateExpense(expense: Expense) {
+        expenseDao.updateExpense(expense.copy(updatedAt = System.currentTimeMillis()))
+    }
+    
+    suspend fun deleteExpense(id: String) {
+        expenseDao.markExpenseAsDeleted(id, System.currentTimeMillis())
+    }
+}
+
+// =============================================================================
+// Color Utils
+// =============================================================================
+
+package com.irrexpensetracker.utils
+
+import androidx.compose.ui.graphics.Color
+
+object ColorUtils {
+    val expenseColors = listOf(
+        Color(0xFFFFCDD2), // Light Red
+        Color(0xFFF8BBD9), // Light Pink
+        Color(0xFFE1BEE7), // Light Purple
+        Color(0xFFD1C4E9), // Light Deep Purple
+        Color(0xFFC5CAE9), // Light Indigo
+        Color(0xFFBBDEFB), // Light Blue
+        Color(0xFFB3E5FC), // Light Light Blue
+        Color(0xFFB2EBF2), // Light Cyan
+        Color(0xFFB2DFDB), // Light Teal
+        Color(0xFFC8E6C9), // Light Green
+        Color(0xFFDCEDC8), // Light Light Green
+        Color(0xFFF0F4C3), // Light Lime
+        Color(0xFFFFF9C4), // Light Yellow
+        Color(0xFFFFE0B2), // Light Orange
+        Color(0xFFFFCCBC), // Light Deep Orange
+    )
+    
+    fun getColorForAmount(amount: Double): Color {
+        return when {
+            amount < 50000 -> expenseColors[11] // Light Yellow - Low
+            amount < 200000 -> expenseColors[9] // Light Green - Medium
+            amount < 500000 -> expenseColors[7] // Light Orange - High
+            else -> expenseColors[0] // Light Red - Very High
+        }
+    }
+    
+    fun getRandomColor(): Color {
+        return expenseColors.random()
+    }
+}
+
+// =============================================================================
+// ViewModels
+// =============================================================================
+
+package com.irrexpensetracker.ui.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.irrexpensetracker.data.entity.ExpenseList
+import com.irrexpensetracker.data.repository.ExpenseRepository
+import com.irrexpensetracker.utils.ColorUtils
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+data class ExpenseListWithTotal(
+    val expenseList: ExpenseList,
+    val totalAmount: Double
+)
+
+@HiltViewModel
+class DashboardViewModel @Inject constructor(
+    private val repository: ExpenseRepository
+) : ViewModel() {
+    
+    private val _expenseListsWithTotals = MutableStateFlow<List<ExpenseListWithTotal>>(emptyList())
+    val expenseListsWithTotals: StateFlow<List<ExpenseListWithTotal>> = _expenseListsWithTotals.asStateFlow()
+    
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+    
+    init {
+        loadExpenseListsWithTotals()
+    }
+    
+    private fun loadExpenseListsWithTotals() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            repository.getAllExpenseLists().collect { expenseLists ->
+                val listsWithTotals = expenseLists.map { expenseList ->
+                    val total = repository.getTotalAmountForList(expenseList.id)
+                    ExpenseListWithTotal(expenseList, total)
+                }
+                _expenseListsWithTotals.value = listsWithTotals
+                _isLoading.value = false
+            }
+        }
+    }
+    
+    fun createExpenseList(title: String) {
+        viewModelScope.launch {
+            val color = ColorUtils.getRandomColor().value.toString()
+            repository.createExpenseList(title, color)
+        }
+    }
+    
+    fun deleteExpenseList(id: String) {
+        viewModelScope.launch {
+            repository.deleteExpenseList(id)
+        }
+    }
+    
+    fun updateExpenseListTitle(expenseList: ExpenseList, newTitle: String) {
+        viewModelScope.launch {
+            repository.updateExpenseList(expenseList.copy(title = newTitle))
+        }
+    }
+    
+    fun updateExpenseListColor(expenseList: ExpenseList, newColor: String) {
+        viewModelScope.launch {
+            repository.updateExpenseList(expenseList.copy(color = newColor))
+        }
+    }
+}
+
+package com.irrexpensetracker.ui.viewmodel
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.irrexpensetracker.data.entity.Expense
+import com.irrexpensetracker.data.entity.ExpenseList
+import com.irrexpensetracker.data.repository.ExpenseRepository
+import com.irrexpensetracker.utils.ColorUtils
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class ExpenseDetailViewModel @Inject constructor(
+    private val repository: ExpenseRepository,
+    savedStateHandle: SavedStateHandle
+) : ViewModel() {
+    
+    private val listId: String = checkNotNull(savedStateHandle["listId"])
+    
+    private val _expenseList = MutableStateFlow<ExpenseList?>(null)
+    val expenseList: StateFlow<ExpenseList?> = _expenseList.asStateFlow()
+    
+    private val _expenses = MutableStateFlow<List<Expense>>(emptyList())
+    val expenses: StateFlow<List<Expense>> = _expenses.asStateFlow()
+    
+    private val _totalAmount = MutableStateFlow(0.0)
+    val totalAmount: StateFlow<Double> = _totalAmount.asStateFlow()
+    
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+    
+    init {
+        loadExpenseList()
+        loadExpenses()
+    }
+    
+    private fun loadExpenseList() {
+        viewModelScope.launch {
+            _expenseList.value = repository.getExpenseListById(listId)
+        }
+    }
+    
+    private fun loadExpenses() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            repository.getExpensesByListId(listId).collect { expenses ->
+                _expenses.value = expenses
+                _totalAmount.value = expenses.sumOf { it.amount }
+                _isLoading.value = false
+            }
+        }
+    }
+    
+    fun addExpense(title: String, amount: Double) {
+        viewModelScope.launch {
+            val color = ColorUtils.getColorForAmount(amount).value.toString()
+            repository.createExpense(listId, title, amount, color)
+        }
+    }
+    
+    fun updateExpense(expense: Expense, title: String, amount: Double) {
+        viewModelScope.launch {
+            val color = ColorUtils.getColorForAmount(amount).value.toString()
+            repository.updateExpense(expense.copy(title = title, amount = amount, color = color))
+        }
+    }
+    
+    fun deleteExpense(expenseId: String) {
+        viewModelScope.launch {
+            repository.deleteExpense(expenseId)
+        }
+    }
+    
+    fun updateExpenseListTitle(newTitle: String) {
+        viewModelScope.launch {
+            _expenseList.value?.let { currentList ->
+                repository.updateExpenseList(currentList.copy(title = newTitle))
+                _expenseList.value = currentList.copy(title = newTitle)
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Navigation
+// =============================================================================
+
+package com.irrexpensetracker.ui.navigation
+
+import androidx.compose.runtime.Composable
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import com.irrexpensetracker.ui.screens.DashboardScreen
+import com.irrexpensetracker.ui.screens.ExpenseDetailScreen
+
+@Composable
+fun ExpenseTrackerNavigation(navController: NavHostController) {
+    NavHost(
+        navController = navController,
+        startDestination = "dashboard"
+    ) {
+        composable("dashboard") {
+            DashboardScreen(
+                onNavigateToExpenseDetail = { listId ->
+                    navController.navigate("expense_detail/$listId")
+                }
+            )
+        }
+        
+        composable("expense_detail/{listId}") { backStackEntry ->
+            val listId = backStackEntry.arguments?.getString("listId") ?: ""
+            ExpenseDetailScreen(
+                listId = listId,
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+    }
+}
+
+// =============================================================================
+// Dashboard Screen
+// =============================================================================
+
+package com.irrexpensetracker.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.irrexpensetracker.ui.components.CreateExpenseListDialog
+import com.irrexpensetracker.ui.viewmodel.DashboardViewModel
+import com.irrexpensetracker.ui.viewmodel.ExpenseListWithTotal
+import java.text.NumberFormat
+import java.util.*
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExpenseDetailScreen(
+    listId: String,
+    onNavigateBack: () -> Unit,
+    viewModel: ExpenseDetailViewModel = hiltViewModel()
+) {
+    val expenseList by viewModel.expenseList.collectAsState()
+    val expenses by viewModel.expenses.collectAsState()
+    val totalAmount by viewModel.totalAmount.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    
+    var showAddExpenseDialog by remember { mutableStateOf(false) }
+    var showEditTitleDialog by remember { mutableStateOf(false) }
+    var editingExpense by remember { mutableStateOf<Expense?>(null) }
+    
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { 
+                    Text(
+                        expenseList?.title ?: "Loading...",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    ) 
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showEditTitleDialog = true }) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit Title")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showAddExpenseDialog = true },
+                containerColor = MaterialTheme.colorScheme.primary
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Expense")
+            }
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            // Total Amount Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Total Amount",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Text(
+                        text = formatCurrency(totalAmount),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            
+            // Expenses List
+            if (isLoading) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
+            } else if (expenses.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "No expenses yet",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Tap + to add your first expense",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(expenses) { expense ->
+                        ExpenseItem(
+                            expense = expense,
+                            onEdit = { editingExpense = expense },
+                            onDelete = { viewModel.deleteExpense(expense.id) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    // Dialogs
+    if (showAddExpenseDialog) {
+        AddExpenseDialog(
+            onDismiss = { showAddExpenseDialog = false },
+            onConfirm = { title, amount ->
+                viewModel.addExpense(title, amount)
+                showAddExpenseDialog = false
+            }
+        )
+    }
+    
+    if (showEditTitleDialog) {
+        CreateExpenseListDialog(
+            onDismiss = { showEditTitleDialog = false },
+            onConfirm = { newTitle ->
+                viewModel.updateExpenseListTitle(newTitle)
+                showEditTitleDialog = false
+            },
+            initialTitle = expenseList?.title ?: "",
+            title = "Edit List Title"
+        )
+    }
+    
+    editingExpense?.let { expense ->
+        AddExpenseDialog(
+            onDismiss = { editingExpense = null },
+            onConfirm = { title, amount ->
+                viewModel.updateExpense(expense, title, amount)
+                editingExpense = null
+            },
+            initialTitle = expense.title,
+            initialAmount = expense.amount.toString(),
+            title = "Edit Expense"
+        )
+    }
+}
+
+@Composable
+fun ExpenseItem(
+    expense: Expense,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val backgroundColor = Color(expense.color.toLongOrNull() ?: 0xFFFFCDD2)
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(backgroundColor)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = expense.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                Text(
+                    text = formatCurrency(expense.amount),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            
+            Row {
+                IconButton(
+                    onClick = onEdit,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "Edit Expense",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete Expense",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatCurrency(amount: Double): String {
+    val format = NumberFormat.getCurrencyInstance(Locale("fa", "IR"))
+    format.currency = Currency.getInstance("IRR")
+    return format.format(amount).replace("IRR", "").trim() + " ریال"
+}
+
+// =============================================================================
+// UI Components
+// =============================================================================
+
+package com.irrexpensetracker.ui.components
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+
+@Composable
+fun CreateExpenseListDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+    initialTitle: String = "",
+    title: String = "Create Expense List"
+) {
+    var titleText by remember { mutableStateOf(initialTitle) }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = titleText,
+                    onValueChange = { titleText = it },
+                    label = { Text("List Title") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (titleText.isNotBlank()) {
+                        onConfirm(titleText.trim())
+                    }
+                },
+                enabled = titleText.isNotBlank()
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    )
+}
+
+@Composable
+fun AddExpenseDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String, Double) -> Unit,
+    initialTitle: String = "",
+    initialAmount: String = "",
+    title: String = "Add Expense"
+) {
+    var titleText by remember { mutableStateOf(initialTitle) }
+    var amountText by remember { mutableStateOf(initialAmount) }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = titleText,
+                    onValueChange = { titleText = it },
+                    label = { Text("Expense Title") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { 
+                        if (it.all { char -> char.isDigit() || char == '.' }) {
+                            amountText = it
+                        }
+                    },
+                    label = { Text("Amount (IRR)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    suffix = { Text("ریال") }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val amount = amountText.toDoubleOrNull()
+                    if (titleText.isNotBlank() && amount != null && amount > 0) {
+                        onConfirm(titleText.trim(), amount)
+                    }
+                },
+                enabled = titleText.isNotBlank() && amountText.toDoubleOrNull() != null && amountText.toDoubleOrNull()!! > 0
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    )
+}
+
+// =============================================================================
+// Theme
+// =============================================================================
+
+package com.irrexpensetracker.ui.theme
+
+import android.app.Activity
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+
+private val DarkColorScheme = darkColorScheme(
+    primary = Purple80,
+    secondary = PurpleGrey80,
+    tertiary = Pink80
+)
+
+private val LightColorScheme = lightColorScheme(
+    primary = Purple40,
+    secondary = PurpleGrey40,
+    tertiary = Pink40
+)
+
+@Composable
+fun IRRExpenseTrackerTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val colorScheme = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            val context = LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+
+        darkTheme -> DarkColorScheme
+        else -> LightColorScheme
+    }
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            window.statusBarColor = colorScheme.primary.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = darkTheme
+        }
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
+}
+
+package com.irrexpensetracker.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+val Purple80 = Color(0xFFD0BCFF)
+val PurpleGrey80 = Color(0xFFCCC2DC)
+val Pink80 = Color(0xFFEFB8C8)
+
+val Purple40 = Color(0xFF6650a4)
+val PurpleGrey40 = Color(0xFF625b71)
+val Pink40 = Color(0xFF7D5260)
+
+package com.irrexpensetracker.ui.theme
+
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+val Typography = Typography(
+    bodyLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.5.sp
+    )
+)
+
+// =============================================================================
+// Hilt Module
+// =============================================================================
+
+package com.irrexpensetracker.di
+
+import android.content.Context
+import androidx.room.Room
+import com.irrexpensetracker.data.database.ExpenseDatabase
+import com.irrexpensetracker.data.dao.ExpenseDao
+import com.irrexpensetracker.data.dao.ExpenseListDao
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+object DatabaseModule {
+    
+    @Provides
+    @Singleton
+    fun provideExpenseDatabase(@ApplicationContext context: Context): ExpenseDatabase {
+        return Room.databaseBuilder(
+            context.applicationContext,
+            ExpenseDatabase::class.java,
+            "expense_database"
+        ).build()
+    }
+    
+    @Provides
+    fun provideExpenseListDao(database: ExpenseDatabase): ExpenseListDao {
+        return database.expenseListDao()
+    }
+    
+    @Provides
+    fun provideExpenseDao(database: ExpenseDatabase): ExpenseDao {
+        return database.expenseDao()
+    }
+}
+
+// =============================================================================
+// Application Class
+// =============================================================================
+
+package com.irrexpensetracker
+
+import android.app.Application
+import dagger.hilt.android.HiltAndroidApp
+
+@HiltAndroidApp
+class ExpenseTrackerApplication : Application()
+
+// =============================================================================
+// Google Drive Sync Service (Optional Implementation)
+// =============================================================================
+
+package com.irrexpensetracker.sync
+
+import android.content.Context
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.api.client.extensions.android.http.AndroidHttp
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
+import com.google.api.services.drive.model.File
+import com.google.gson.Gson
+import com.irrexpensetracker.data.entity.Expense
+import com.irrexpensetracker.data.entity.ExpenseList
+import com.irrexpensetracker.data.repository.ExpenseRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.FileOutputStream
+import javax.inject.Inject
+import javax.inject.Singleton
+
+data class SyncData(
+    val expenseLists: List<ExpenseList>,
+    val expenses: List<Expense>
+)
+
+@Singleton
+class GoogleDriveSyncService @Inject constructor(
+    private val repository: ExpenseRepository
+) {
+    private var driveService: Drive? = null
+    
+    fun initializeDriveService(context: Context) {
+        val account = GoogleSignIn.getLastSignedInAccount(context)
+        if (account != null) {
+            val credential = GoogleAccountCredential.usingOAuth2(
+                context,
+                listOf(DriveScopes.DRIVE_APPDATA)
+            )
+            credential.selectedAccount = account.account
+            
+            driveService = Drive.Builder(
+                AndroidHttp.newCompatibleTransport(),
+                GsonFactory(),
+                credential
+            )
+                .setApplicationName("IRR Expense Tracker")
+                .build()
+        }
+    }
+    
+    suspend fun syncToCloud(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val drive = driveService ?: return@withContext Result.failure(Exception("Drive service not initialized"))
+            
+            // Get all data from local database
+            val expenseLists = repository.getAllExpenseLists()
+            val allExpenses = mutableListOf<Expense>()
+            
+            // This is simplified - in real implementation, you'd collect all expenses properly
+            val syncData = SyncData(emptyList(), allExpenses)
+            val jsonData = Gson().toJson(syncData)
+            
+            // Check if backup file exists
+            val query = "name='expense_backup.json' and parents in 'appDataFolder'"
+            val existingFiles = drive.files().list().setQ(query).setSpaces("appDataFolder").execute()
+            
+            val fileMetadata = File().apply {
+                name = "expense_backup.json"
+                parents = listOf("appDataFolder")
+            }
+            
+            if (existingFiles.files.isNotEmpty()) {
+                // Update existing file
+                val fileId = existingFiles.files[0].id
+                val mediaContent = com.google.api.client.http.ByteArrayContent(
+                    "application/json",
+                    jsonData.toByteArray()
+                )
+                drive.files().update(fileId, fileMetadata, mediaContent).execute()
+            } else {
+                // Create new file
+                val mediaContent = com.google.api.client.http.ByteArrayContent(
+                    "application/json",
+                    jsonData.toByteArray()
+                )
+                drive.files().create(fileMetadata, mediaContent).execute()
+            }
+            
+            Result.success("Sync completed successfully")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun syncFromCloud(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val drive = driveService ?: return@withContext Result.failure(Exception("Drive service not initialized"))
+            
+            val query = "name='expense_backup.json' and parents in 'appDataFolder'"
+            val files = drive.files().list().setQ(query).setSpaces("appDataFolder").execute()
+            
+            if (files.files.isEmpty()) {
+                return@withContext Result.failure(Exception("No backup file found"))
+            }
+            
+            val fileId = files.files[0].id
+            val outputStream = ByteArrayOutputStream()
+            drive.files().get(fileId).executeMediaAndDownloadTo(outputStream)
+            
+            val jsonData = outputStream.toString()
+            val syncData = Gson().fromJson(jsonData, SyncData::class.java)
+            
+            // Restore data to local database
+            // This is simplified - in real implementation, you'd handle conflicts and merging
+            
+            Result.success("Restore completed successfully")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+}
+
+// =============================================================================
+// AndroidManifest.xml
+// =============================================================================
+
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:name=".ExpenseTrackerApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.IRRExpenseTracker"
+        tools:targetApi="31">
+        
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.IRRExpenseTracker">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+
+// =============================================================================
+// strings.xml
+// =============================================================================
+
+<resources>
+    <string name="app_name">IRR Expense Tracker</string>
+    <string name="default_web_client_id">YOUR_GOOGLE_CLIENT_ID_HERE</string>
+</resources> java.util.*
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DashboardScreen(
+    onNavigateToExpenseDetail: (String) -> Unit,
+    viewModel: DashboardViewModel = hiltViewModel()
+) {
+    val expenseListsWithTotals by viewModel.expenseListsWithTotals.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    
+    var showCreateDialog by remember { mutableStateOf(false) }
+    
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { 
+                    Text(
+                        "IRR Expense Tracker",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    ) 
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showCreateDialog = true },
+                containerColor = MaterialTheme.colorScheme.primary
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Expense List")
+            }
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            } else if (expenseListsWithTotals.isEmpty()) {
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "No expense lists yet",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Tap + to create your first list",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyVerticalStaggeredGrid(
+                    columns = StaggeredGridCells.Fixed(2),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp),
+                    verticalItemSpacing = 12.dp,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(expenseListsWithTotals) { expenseListWithTotal ->
+                        ExpenseListCard(
+                            expenseListWithTotal = expenseListWithTotal,
+                            onClick = { onNavigateToExpenseDetail(expenseListWithTotal.expenseList.id) },
+                            onDelete = { viewModel.deleteExpenseList(expenseListWithTotal.expenseList.id) },
+                            onUpdateTitle = { newTitle -> 
+                                viewModel.updateExpenseListTitle(expenseListWithTotal.expenseList, newTitle)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    if (showCreateDialog) {
+        CreateExpenseListDialog(
+            onDismiss = { showCreateDialog = false },
+            onConfirm = { title ->
+                viewModel.createExpenseList(title)
+                showCreateDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+fun ExpenseListCard(
+    expenseListWithTotal: ExpenseListWithTotal,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+    onUpdateTitle: (String) -> Unit
+) {
+    var showEditDialog by remember { mutableStateOf(false) }
+    val backgroundColor = Color(expenseListWithTotal.expenseList.color.toLongOrNull() ?: 0xFFFFCDD2)
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(backgroundColor)
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = expenseListWithTotal.expenseList.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = formatCurrency(expenseListWithTotal.totalAmount),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    IconButton(
+                        onClick = { showEditDialog = true },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    if (showEditDialog) {
+        CreateExpenseListDialog(
+            onDismiss = { showEditDialog = false },
+            onConfirm = { newTitle ->
+                onUpdateTitle(newTitle)
+                showEditDialog = false
+            },
+            initialTitle = expenseListWithTotal.expenseList.title,
+            title = "Edit List Title"
+        )
+    }
+}
+
+private fun formatCurrency(amount: Double): String {
+    val format = NumberFormat.getCurrencyInstance(Locale("fa", "IR"))
+    format.currency = Currency.getInstance("IRR")
+    return format.format(amount).replace("IRR", "").trim() + " ریال"
+}
+
+// =============================================================================
+// Expense Detail Screen
+// =============================================================================
+
+package com.irrexpensetracker.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.irrexpensetracker.data.entity.Expense
+import com.irrexpensetracker.ui.components.AddExpenseDialog
+import com.irrexpensetracker.ui.components.CreateExpenseListDialog
+import com.irrexpensetracker.ui.viewmodel.ExpenseDetailViewModel
+import java.text.NumberFormat
+import
